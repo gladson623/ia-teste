@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mordomo AI</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; padding: 12px; background: #111827; color: #f9fafb; }
+      h1, h2 { margin: 8px 0; }
+      .card { background: #1f2937; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+      button { margin: 4px 4px 4px 0; padding: 8px 10px; border: none; border-radius: 6px; background: #2563eb; color: #fff; }
+      input, textarea { width: 100%; box-sizing: border-box; margin-top: 4px; margin-bottom: 6px; padding: 8px; border-radius: 6px; border: 1px solid #374151; background: #0f172a; color: #f9fafb; }
+      pre { overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+      .grid { display: grid; gap: 10px; grid-template-columns: 1fr; }
+      @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
+    </style>
+  </head>
+  <body>
+    <h1>Mordomo AI</h1>
+    <div class="card">
+      <h2>Controle do Agente</h2>
+      <label>Intervalo automático (ms)</label>
+      <input id="intervalInput" type="number" min="1000" value="10000" />
+      <button id="startBtn">Iniciar automático</button>
+      <button id="pauseBtn">Pausar</button>
+      <button id="cycleBtn">Executar ciclo manual</button>
+      <pre id="state"></pre>
+    </div>
+
+    <div class="card">
+      <h2>Chat</h2>
+      <textarea id="message" rows="3" placeholder="Fale com o Mordomo..."></textarea>
+      <button id="sendBtn">Enviar</button>
+      <pre id="chatOutput"></pre>
+    </div>
+
+    <div class="grid">
+      <div class="card"><h2>Memórias</h2><pre id="memory"></pre></div>
+      <div class="card"><h2>Objetivos</h2><pre id="goals"></pre></div>
+      <div class="card"><h2>Experiências</h2><pre id="experiences"></pre></div>
+      <div class="card"><h2>Habilidades</h2><pre id="skills"></pre></div>
+    </div>
+
+    <div class="card">
+      <h2>Logs e ações</h2>
+      <pre id="logs"></pre>
+    </div>
+
+    <script>
+      const api = {
+        getState: () => fetch('/api/state').then((r) => r.json()),
+        getMemory: () => fetch('/api/memory?limit=20').then((r) => r.json()),
+        getGoals: () => fetch('/api/goals').then((r) => r.json()),
+        getExperiences: () => fetch('/api/experiences').then((r) => r.json()),
+        getSkills: () => fetch('/api/skills').then((r) => r.json()),
+        chat: (message) => fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) }).then((r) => r.json()),
+        cycle: () => fetch('/api/cycle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then((r) => r.json()),
+        start: (intervalMs) => fetch('/api/agent/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ intervalMs }) }).then((r) => r.json()),
+        pause: () => fetch('/api/agent/pause', { method: 'POST' }).then((r) => r.json())
+      };
+
+      const el = {
+        state: document.getElementById('state'),
+        memory: document.getElementById('memory'),
+        goals: document.getElementById('goals'),
+        experiences: document.getElementById('experiences'),
+        skills: document.getElementById('skills'),
+        logs: document.getElementById('logs'),
+        chatOutput: document.getElementById('chatOutput')
+      };
+
+      function setJson(target, data) { target.textContent = JSON.stringify(data, null, 2); }
+
+      async function refresh() {
+        const [state, memory, goals, experiences, skills] = await Promise.all([
+          api.getState(), api.getMemory(), api.getGoals(), api.getExperiences(), api.getSkills()
+        ]);
+        setJson(el.state, state.data);
+        setJson(el.memory, memory.data);
+        setJson(el.goals, goals.data);
+        setJson(el.experiences, experiences.data);
+        setJson(el.skills, skills.data);
+      }
+
+      document.getElementById('sendBtn').onclick = async () => {
+        const message = document.getElementById('message').value.trim();
+        if (!message) return;
+        const response = await api.chat(message);
+        setJson(el.chatOutput, response.data);
+        await refresh();
+      };
+
+      document.getElementById('cycleBtn').onclick = async () => {
+        await api.cycle();
+        await refresh();
+      };
+
+      document.getElementById('startBtn').onclick = async () => {
+        const intervalMs = Number(document.getElementById('intervalInput').value || 10000);
+        await api.start(intervalMs);
+        await refresh();
+      };
+
+      document.getElementById('pauseBtn').onclick = async () => {
+        await api.pause();
+        await refresh();
+      };
+
+      const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+      ws.onmessage = (event) => {
+        const line = JSON.stringify(JSON.parse(event.data), null, 2);
+        el.logs.textContent = `${line}\n${el.logs.textContent}`.slice(0, 6000);
+      };
+
+      refresh();
+      setInterval(refresh, 8000);
+    </script>
+  </body>
+</html>
