@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Random Joke Generator</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app" aria-labelledby="app-title">
+      <h1 id="app-title">Random Joke Generator</h1>
+      <p class="description">Need a quick laugh? Fetch a safe random joke.</p>
+
+      <section class="controls" aria-label="Joke controls">
+        <button id="fetch-joke" type="button">Get random joke</button>
+        <button id="retry-joke" type="button" hidden>Try again</button>
+      </section>
+
+      <section class="joke-card" aria-live="polite" aria-atomic="true">
+        <p id="status" role="status">Click "Get random joke" to load one.</p>
+        <p id="joke-setup" class="joke-setup"></p>
+        <p id="joke-delivery" class="joke-delivery"></p>
+      </section>
+    </main>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
