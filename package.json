@@ -1,0 +1,28 @@
+{
+  "name": "ia-teste",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --import tsx --test",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --import tsx src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://localhost:26831/gladson623/ia-teste"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^18.0.5",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.3"
+  }
+}
