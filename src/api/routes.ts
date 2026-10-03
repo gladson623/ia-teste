@@ -1,7 +1,17 @@
 import { Router } from "express";
 import { z } from "zod";
 import { AgentService } from "../agent/service";
-import { ExperienceRepository, GoalRepository, MemoryRepository, SkillRepository } from "../memory/repositories";
+import {
+  ConversationRepository,
+  ExperienceRepository,
+  GoalRepository,
+  MemoryRepository,
+  ReminderRepository,
+  SkillRepository
+} from "../memory/repositories";
+import { UnityCommandSchema } from "../unity/actions";
+import { UnityBridge } from "../unity/bridge";
+import { isKokoroVoice, KokoroTts } from "../voice/kokoro";
 
 interface RouteDeps {
   agent: AgentService;
@@ -9,6 +19,10 @@ interface RouteDeps {
   goals: GoalRepository;
   experiences: ExperienceRepository;
   skills: SkillRepository;
+  conversation: ConversationRepository;
+  reminders: ReminderRepository;
+  unity: UnityBridge;
+  tts: KokoroTts;
 }
 
 export function createRouter(deps: RouteDeps) {
@@ -38,6 +52,46 @@ export function createRouter(deps: RouteDeps) {
 
   router.get("/skills", (_req, res) => {
     res.json({ ok: true, data: deps.skills.list() });
+  });
+
+  router.get("/chat/history", (req, res) => {
+    const limit = Math.min(Number(req.query.limit ?? 50) || 50, 200);
+    res.json({ ok: true, data: deps.conversation.recent(limit) });
+  });
+
+  router.get("/reminders", (_req, res) => {
+    res.json({ ok: true, data: deps.reminders.list() });
+  });
+
+  router.get("/unity/state", (_req, res) => {
+    res.json({ ok: true, data: deps.unity.getState() });
+  });
+
+  // Envia um comando ao corpo (Unity). Só passam as ações do contrato; `result` é null se nenhum corpo respondeu.
+  router.post("/unity/command", async (req, res, next) => {
+    try {
+      const command = UnityCommandSchema.parse(req.body);
+      const { id, result } = await deps.unity.send(command);
+      res.json({ ok: true, data: { id, command, connected: deps.unity.getState().connected, result } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/tts/status", async (_req, res) => {
+    res.json({ ok: true, data: { available: await deps.tts.available() } });
+  });
+
+  // Converte texto em fala (WAV) pelo serviço local do Kokoro.
+  router.post("/tts", async (req, res, next) => {
+    try {
+      const schema = z.object({ text: z.string().min(1).max(2000), voice: z.string().refine(isKokoroVoice, "voz desconhecida").optional() });
+      const { text, voice } = schema.parse(req.body);
+      const audio = await deps.tts.synthesize(text, voice);
+      res.set("Content-Type", "audio/wav").send(audio);
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post("/chat", async (req, res, next) => {

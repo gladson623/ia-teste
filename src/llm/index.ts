@@ -1,6 +1,7 @@
 import { config } from "../config/env";
 import { MockLlmProvider } from "./mockProvider";
 import { OllamaProvider } from "./ollamaProvider";
+import { DecisionInput, ReflectionInput, RepairInput } from "./provider";
 import { LlmContext, LlmProvider, LlmResponse } from "./types";
 
 export class ResilientLlm implements LlmProvider {
@@ -9,7 +10,8 @@ export class ResilientLlm implements LlmProvider {
   private readonly mock = new MockLlmProvider();
   private readonly ollama = new OllamaProvider({
     baseUrl: config.llm.ollamaBaseUrl,
-    model: config.llm.ollamaModel
+    model: config.llm.ollamaModel,
+    timeoutMs: config.llm.ollamaTimeoutMs
   });
 
   async available(): Promise<boolean> {
@@ -18,24 +20,40 @@ export class ResilientLlm implements LlmProvider {
     return (await this.ollama.available()) || this.mock.available();
   }
 
-  async generate(context: LlmContext): Promise<LlmResponse> {
+  generate(context: LlmContext): Promise<LlmResponse> {
+    return this.run((provider) => provider.generate(context));
+  }
+
+  decide(input: DecisionInput): Promise<LlmResponse> {
+    return this.run((provider) => provider.decide(input));
+  }
+
+  repairDecision(input: RepairInput): Promise<LlmResponse> {
+    return this.run((provider) => provider.repairDecision(input));
+  }
+
+  reflect(input: ReflectionInput): Promise<LlmResponse> {
+    return this.run((provider) => provider.reflect(input));
+  }
+
+  private async run(call: (provider: LlmProvider) => Promise<LlmResponse>): Promise<LlmResponse> {
     if (config.llm.mode === "mock") {
-      return this.mock.generate(context);
+      return call(this.mock);
     }
 
     if (config.llm.mode === "ollama") {
-      return this.ollama.generate(context);
+      return call(this.ollama);
     }
 
     try {
       if (await this.ollama.available()) {
-        return this.ollama.generate(context);
+        return await call(this.ollama);
       }
-    } catch {
-      // fallback to mock
+    } catch (error) {
+      console.warn(`Ollama falhou, usando mock: ${(error as Error).message}`);
     }
 
-    const fallback = await this.mock.generate(context);
+    const fallback = await call(this.mock);
     return { ...fallback, usedFallback: true };
   }
 }

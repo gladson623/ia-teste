@@ -28,3 +28,32 @@ test("resilient llm falls back to mock when ollama is unavailable", async () => 
   config.llm.ollamaBaseUrl = original.ollamaBaseUrl;
   config.llm.ollamaModel = original.ollamaModel;
 });
+
+test("resilient llm falls back to mock when ollama generate fails", async () => {
+  config.llm.mode = "auto";
+  config.llm.ollamaModel = "fake-model";
+
+  const originalFetch = global.fetch;
+  global.fetch = (async (url: string) =>
+    String(url).endsWith("/api/tags")
+      ? { ok: true, json: async () => ({ models: [{ name: "fake-model:latest" }] }) }
+      : { ok: false, status: 500, text: async () => "boom" }) as unknown as typeof fetch;
+
+  try {
+    const response = await new ResilientLlm().generate({
+      personality: defaultPersonality,
+      state: {},
+      memories: [],
+      goals: [],
+      tools: [],
+      userMessage: "oi"
+    });
+
+    assert.equal(response.provider, "mock");
+    assert.equal(response.usedFallback, true);
+  } finally {
+    global.fetch = originalFetch;
+    config.llm.mode = original.mode;
+    config.llm.ollamaModel = original.ollamaModel;
+  }
+});

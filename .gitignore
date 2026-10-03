@@ -2,3 +2,24 @@ node_modules
 dist
 .env
 data/database.sqlite
+
+# Voz (Kokoro): ambiente Python local
+tts/.venv/
+__pycache__/
+
+# Unity
+unity/Library/
+unity/Temp/
+unity/Obj/
+unity/obj/
+unity/Logs/
+unity/UserSettings/
+unity/Builds/
+unity/*.csproj
+unity/*.sln
+unity/*.slnx
+unity/.utmp/
+unity/build/
+
+# Amostras de voz geradas para comparar (recriáveis)
+tts/amostras/

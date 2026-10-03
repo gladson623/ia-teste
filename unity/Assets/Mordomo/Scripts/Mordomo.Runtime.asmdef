@@ -1,0 +1,10 @@
+{
+  "name": "Mordomo.Runtime",
+  "rootNamespace": "Mordomo",
+  "references": [
+    "Unity.InputSystem",
+    "Unity.XR.CoreUtils",
+    "VRM10"
+  ],
+  "autoReferenced": true
+}

@@ -60,6 +60,27 @@ export function createDatabase(databasePath: string): Database.Database {
       last_used_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS conversation (
+      id TEXT PRIMARY KEY,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reminders (
+      id TEXT PRIMARY KEY,
+      text TEXT NOT NULL,
+      due_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      fired_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS agent_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS personality_changes (
       id TEXT PRIMARY KEY,
       trait TEXT NOT NULL,

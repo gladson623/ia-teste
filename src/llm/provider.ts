@@ -1,13 +1,40 @@
-import { AgentDecision, AgentReflection } from '../agent/contracts.js';
+import type { AgentContext } from "../agent/context";
+import type { AgentDecision, AgentReflection } from "../agent/contracts";
+import type { PersonalityProfile } from "../personality/profile";
 
-export interface LlmProvider {
-  readonly name: string;
-  decide(input: unknown): Promise<string>;
-  repairDecision(input: { context: unknown; invalidOutput: string; error: string }): Promise<string>;
-  reflect(input: unknown): Promise<string>;
+export type { LlmProvider } from "./types";
+
+export interface DecisionInput {
+  personality: PersonalityProfile;
+  context: AgentContext;
+  tools: Array<{ name: string; description: string; arguments: string }>;
+}
+
+export interface RepairInput extends DecisionInput {
+  invalidOutput: string;
+  error: string;
+}
+
+export interface ReflectionInput {
+  personality: PersonalityProfile;
+  action: string;
+  arguments: Record<string, unknown>;
+  goal: string;
+  reason: string;
+  success: boolean;
+  result: string;
+  activeGoals: string[];
+  skills: string[];
+}
+
+export interface DecisionResult {
+  decision: AgentDecision | null;
+  provider: string;
+  usedFallback: boolean;
+  error?: string;
 }
 
 export interface StructuredLlmClient {
-  decide(context: unknown): Promise<{ decision: AgentDecision | null; provider: string; error?: string }>;
-  reflect(context: unknown): Promise<{ reflection: AgentReflection; provider: string }>;
+  decide(input: DecisionInput): Promise<DecisionResult>;
+  reflect(input: ReflectionInput): Promise<{ reflection: AgentReflection; provider: string }>;
 }
