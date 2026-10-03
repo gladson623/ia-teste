@@ -1,94 +1,54 @@
-import { ZodError } from 'zod';
-import { AgentDecision, AgentReflection, DecisionSchema, ReflectionSchema } from '../agent/contracts.js';
-import { LlmProvider, StructuredLlmClient } from './provider.js';
+import { AgentDecision, AgentReflection, DecisionSchema, ReflectionSchema } from "../agent/contracts";
+import { DecisionInput, DecisionResult, ReflectionInput, StructuredLlmClient } from "./provider";
+import { LlmProvider } from "./types";
 
-const parseJson = (input: string) => {
+const parseDecision = (text: string): { decision: AgentDecision | null; error: string } => {
+  let value: unknown;
   try {
-    return { value: JSON.parse(input), error: null as string | null };
+    value = JSON.parse(text);
   } catch (error) {
-    return { value: null, error: (error as Error).message };
+    return { decision: null, error: (error as Error).message };
   }
+
+  const parsed = DecisionSchema.safeParse(value);
+  return parsed.success
+    ? { decision: parsed.data, error: "" }
+    : { decision: null, error: JSON.stringify(parsed.error.issues) };
 };
 
-const zodError = (error: unknown) => {
-  if (error instanceof ZodError) {
-    return JSON.stringify(error.issues);
-  }
-  return String(error);
-};
-
+// Transforma o texto do provider em decisões/reflexões validadas. O modo (mock/ollama/auto) é do provider.
 export class LlmClient implements StructuredLlmClient {
-  constructor(
-    private readonly primary: LlmProvider,
-    private readonly fallback: LlmProvider
-  ) {}
+  constructor(private readonly provider: LlmProvider) {}
 
-  private async withFallback<T>(handler: (provider: LlmProvider) => Promise<T>): Promise<{ value: T; provider: string }> {
-    try {
-      return { value: await handler(this.primary), provider: this.primary.name };
-    } catch {
-      return { value: await handler(this.fallback), provider: this.fallback.name };
+  async decide(input: DecisionInput): Promise<DecisionResult> {
+    const first = await this.provider.decide(input);
+    const firstParsed = parseDecision(first.text);
+    if (firstParsed.decision) {
+      return { decision: firstParsed.decision, provider: first.provider, usedFallback: first.usedFallback };
     }
+
+    const second = await this.provider.repairDecision({ ...input, invalidOutput: first.text, error: firstParsed.error });
+    const secondParsed = parseDecision(second.text);
+    if (secondParsed.decision) {
+      return { decision: secondParsed.decision, provider: second.provider, usedFallback: second.usedFallback };
+    }
+
+    return {
+      decision: null,
+      provider: second.provider,
+      usedFallback: second.usedFallback,
+      error: `invalid_decision_json:${secondParsed.error}`
+    };
   }
 
-  async decide(context: unknown): Promise<{ decision: AgentDecision | null; provider: string; error?: string }> {
-    const first = await this.withFallback((provider) => provider.decide({ context }));
-    const firstParsed = parseJson(first.value);
-
-    if (firstParsed.value) {
-      try {
-        return { decision: DecisionSchema.parse(firstParsed.value), provider: first.provider };
-      } catch (error) {
-        const second = await this.withFallback((provider) =>
-          provider.repairDecision({
-            context,
-            invalidOutput: first.value,
-            error: zodError(error)
-          })
-        );
-        const secondParsed = parseJson(second.value);
-        if (secondParsed.value) {
-          try {
-            return { decision: DecisionSchema.parse(secondParsed.value), provider: second.provider };
-          } catch (secondError) {
-            return { decision: null, provider: second.provider, error: `invalid_decision_json:${zodError(secondError)}` };
-          }
-        }
-
-        return { decision: null, provider: second.provider, error: `invalid_decision_json:${secondParsed.error}` };
-      }
-    }
-
-    const second = await this.withFallback((provider) =>
-      provider.repairDecision({
-        context,
-        invalidOutput: first.value,
-        error: firstParsed.error ?? 'invalid_json'
-      })
-    );
-    const secondParsed = parseJson(second.value);
-    if (!secondParsed.value) {
-      return { decision: null, provider: second.provider, error: `invalid_decision_json:${secondParsed.error}` };
-    }
-
+  // A reflexão é opcional: qualquer falha vira reflexão vazia e o ciclo segue.
+  async reflect(input: ReflectionInput): Promise<{ reflection: AgentReflection; provider: string }> {
     try {
-      return { decision: DecisionSchema.parse(secondParsed.value), provider: second.provider };
-    } catch (error) {
-      return { decision: null, provider: second.provider, error: `invalid_decision_json:${zodError(error)}` };
-    }
-  }
-
-  async reflect(context: unknown): Promise<{ reflection: AgentReflection; provider: string }> {
-    const response = await this.withFallback((provider) => provider.reflect(context));
-    const parsed = parseJson(response.value);
-    if (!parsed.value) {
-      return { reflection: {}, provider: response.provider };
-    }
-
-    try {
-      return { reflection: ReflectionSchema.parse(parsed.value), provider: response.provider };
+      const response = await this.provider.reflect(input);
+      const parsed = ReflectionSchema.safeParse(JSON.parse(response.text));
+      return { reflection: parsed.success ? parsed.data : {}, provider: response.provider };
     } catch {
-      return { reflection: {}, provider: response.provider };
+      return { reflection: {}, provider: this.provider.name };
     }
   }
 }

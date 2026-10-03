@@ -57,3 +57,19 @@ export interface AgentState {
   lastCycleAt: string | null;
   cycleCount: number;
 }
+
+export interface ConversationMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+export interface Reminder {
+  id: string;
+  text: string;
+  dueAt: string;
+  status: "pending" | "fired" | "cancelled";
+  createdAt: string;
+  firedAt: string | null;
+}

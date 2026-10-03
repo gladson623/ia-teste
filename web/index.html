@@ -5,113 +5,228 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mordomo AI</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 0; padding: 12px; background: #111827; color: #f9fafb; }
-      h1, h2 { margin: 8px 0; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, sans-serif; margin: 0; background: #111827; color: #f9fafb; }
+      main { max-width: 900px; margin: 0 auto; padding: 12px; }
+      h1 { margin: 8px 0; font-size: 22px; }
+      h2 { margin: 8px 0; font-size: 16px; }
       .card { background: #1f2937; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
-      button { margin: 4px 4px 4px 0; padding: 8px 10px; border: none; border-radius: 6px; background: #2563eb; color: #fff; }
-      input, textarea { width: 100%; box-sizing: border-box; margin-top: 4px; margin-bottom: 6px; padding: 8px; border-radius: 6px; border: 1px solid #374151; background: #0f172a; color: #f9fafb; }
-      pre { overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+      button { margin: 4px 4px 4px 0; padding: 8px 12px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      input, textarea { width: 100%; margin-top: 4px; margin-bottom: 6px; padding: 8px; border-radius: 6px; border: 1px solid #374151; background: #0f172a; color: #f9fafb; font: inherit; }
+      pre { overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; max-height: 320px; }
+      summary { cursor: pointer; font-weight: bold; }
       .grid { display: grid; gap: 10px; grid-template-columns: 1fr; }
       @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+      #chat { display: flex; flex-direction: column; gap: 8px; height: 50vh; min-height: 260px; overflow-y: auto; padding: 4px; }
+      .msg { max-width: 80%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+      .msg.user { align-self: flex-end; background: #2563eb; }
+      .msg.assistant { align-self: flex-start; background: #374151; }
+      .msg.reminder { align-self: center; background: #92400e; }
+      .msg.error { align-self: center; background: #7f1d1d; }
+      .msg small { display: block; margin-top: 4px; opacity: 0.7; font-size: 11px; }
+      .composer { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
+      .composer textarea { margin: 0; resize: none; }
+      .composer button { margin: 0; }
+      #status { font-size: 12px; opacity: 0.8; }
+      .voice { display: block; margin-top: 8px; font-size: 13px; }
+      .voice input { width: auto; margin: 0 4px 0 0; }
+      #voiceStatus { opacity: 0.7; }
+      .msg .listen { margin: 6px 0 0; padding: 2px 8px; font-size: 11px; background: #4b5563; display: block; }
     </style>
   </head>
   <body>
-    <h1>Mordomo AI</h1>
-    <div class="card">
-      <h2>Controle do Agente</h2>
-      <label>Intervalo automático (ms)</label>
-      <input id="intervalInput" type="number" min="1000" value="10000" />
-      <button id="startBtn">Iniciar automático</button>
-      <button id="pauseBtn">Pausar</button>
-      <button id="cycleBtn">Executar ciclo manual</button>
-      <pre id="state"></pre>
-    </div>
+    <main>
+      <h1>Mordomo AI <span id="status"></span></h1>
 
-    <div class="card">
-      <h2>Chat</h2>
-      <textarea id="message" rows="3" placeholder="Fale com o Mordomo..."></textarea>
-      <button id="sendBtn">Enviar</button>
-      <pre id="chatOutput"></pre>
-    </div>
+      <div class="card">
+        <div id="chat"></div>
+        <div class="composer">
+          <textarea id="message" rows="2" placeholder="Fale com o Mordomo... (Enter envia, Shift+Enter quebra a linha)"></textarea>
+          <button id="sendBtn">Enviar</button>
+        </div>
+        <label class="voice"><input id="voiceToggle" type="checkbox" /> Falar as respostas <span id="voiceStatus"></span></label>
+      </div>
 
-    <div class="grid">
-      <div class="card"><h2>Memórias</h2><pre id="memory"></pre></div>
-      <div class="card"><h2>Objetivos</h2><pre id="goals"></pre></div>
-      <div class="card"><h2>Experiências</h2><pre id="experiences"></pre></div>
-      <div class="card"><h2>Habilidades</h2><pre id="skills"></pre></div>
-    </div>
+      <details class="card">
+        <summary>Lembretes</summary>
+        <pre id="reminders"></pre>
+      </details>
 
-    <div class="card">
-      <h2>Logs e ações</h2>
-      <pre id="logs"></pre>
-    </div>
+      <details class="card">
+        <summary>Agente autônomo</summary>
+        <label for="intervalInput">Intervalo automático (ms)</label>
+        <input id="intervalInput" type="number" min="1000" value="10000" />
+        <button id="startBtn">Iniciar automático</button>
+        <button id="pauseBtn">Pausar</button>
+        <button id="cycleBtn">Executar ciclo manual</button>
+        <pre id="state"></pre>
+      </details>
+
+      <details class="card">
+        <summary>Memórias, objetivos, experiências e habilidades</summary>
+        <div class="grid">
+          <div><h2>Memórias</h2><pre id="memory"></pre></div>
+          <div><h2>Objetivos</h2><pre id="goals"></pre></div>
+          <div><h2>Experiências</h2><pre id="experiences"></pre></div>
+          <div><h2>Habilidades</h2><pre id="skills"></pre></div>
+        </div>
+      </details>
+
+      <details class="card">
+        <summary>Logs e ações</summary>
+        <pre id="logs"></pre>
+      </details>
+    </main>
 
     <script>
+      const json = (r) => r.json();
+      const post = (url, body) =>
+        fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) }).then(json);
+
       const api = {
-        getState: () => fetch('/api/state').then((r) => r.json()),
-        getMemory: () => fetch('/api/memory?limit=20').then((r) => r.json()),
-        getGoals: () => fetch('/api/goals').then((r) => r.json()),
-        getExperiences: () => fetch('/api/experiences').then((r) => r.json()),
-        getSkills: () => fetch('/api/skills').then((r) => r.json()),
-        chat: (message) => fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) }).then((r) => r.json()),
-        cycle: () => fetch('/api/cycle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then((r) => r.json()),
-        start: (intervalMs) => fetch('/api/agent/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ intervalMs }) }).then((r) => r.json()),
-        pause: () => fetch('/api/agent/pause', { method: 'POST' }).then((r) => r.json())
+        getState: () => fetch('/api/state').then(json),
+        getMemory: () => fetch('/api/memory?limit=20').then(json),
+        getGoals: () => fetch('/api/goals').then(json),
+        getExperiences: () => fetch('/api/experiences').then(json),
+        getSkills: () => fetch('/api/skills').then(json),
+        getReminders: () => fetch('/api/reminders').then(json),
+        getHistory: () => fetch('/api/chat/history?limit=50').then(json),
+        chat: (message) => post('/api/chat', { message }),
+        cycle: () => post('/api/cycle'),
+        start: (intervalMs) => post('/api/agent/start', { intervalMs }),
+        pause: () => post('/api/agent/pause')
       };
 
-      const el = {
-        state: document.getElementById('state'),
-        memory: document.getElementById('memory'),
-        goals: document.getElementById('goals'),
-        experiences: document.getElementById('experiences'),
-        skills: document.getElementById('skills'),
-        logs: document.getElementById('logs'),
-        chatOutput: document.getElementById('chatOutput')
-      };
+      const $ = (id) => document.getElementById(id);
+      const setJson = (id, data) => { $(id).textContent = JSON.stringify(data, null, 2); };
 
-      function setJson(target, data) { target.textContent = JSON.stringify(data, null, 2); }
-
-      async function refresh() {
-        const [state, memory, goals, experiences, skills] = await Promise.all([
-          api.getState(), api.getMemory(), api.getGoals(), api.getExperiences(), api.getSkills()
-        ]);
-        setJson(el.state, state.data);
-        setJson(el.memory, memory.data);
-        setJson(el.goals, goals.data);
-        setJson(el.experiences, experiences.data);
-        setJson(el.skills, skills.data);
+      function addMessage(kind, text, note) {
+        const bubble = document.createElement('div');
+        bubble.className = `msg ${kind}`;
+        bubble.textContent = text;
+        if (note) {
+          const small = document.createElement('small');
+          small.textContent = note;
+          bubble.appendChild(small);
+        }
+        if (kind === 'assistant' || kind === 'reminder') {
+          const listen = document.createElement('button');
+          listen.className = 'listen';
+          listen.textContent = 'Ouvir';
+          listen.onclick = () => speak(text);
+          bubble.appendChild(listen);
+        }
+        $('chat').appendChild(bubble);
+        $('chat').scrollTop = $('chat').scrollHeight;
+        return bubble;
       }
 
-      document.getElementById('sendBtn').onclick = async () => {
-        const message = document.getElementById('message').value.trim();
-        if (!message) return;
-        const response = await api.chat(message);
-        setJson(el.chatOutput, response.data);
-        await refresh();
+      // Voz (Kokoro local): pede o WAV ao servidor e toca; uma fala por vez.
+      let currentAudio = null;
+      async function speak(text) {
+        $('voiceStatus').textContent = '(gerando voz...)';
+        try {
+          const response = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text.slice(0, 2000) })
+          });
+          if (!response.ok) throw new Error((await response.json()).error);
+          if (currentAudio) currentAudio.pause();
+          currentAudio = new Audio(URL.createObjectURL(await response.blob()));
+          await currentAudio.play();
+          $('voiceStatus').textContent = '';
+        } catch (error) {
+          $('voiceStatus').textContent = `(voz indisponível: ${error.message})`;
+        }
+      }
+
+      try { $('voiceToggle').checked = localStorage.getItem('mordomo.voice') === '1'; } catch {}
+      $('voiceToggle').onchange = () => {
+        try { localStorage.setItem('mordomo.voice', $('voiceToggle').checked ? '1' : '0'); } catch {}
       };
 
-      document.getElementById('cycleBtn').onclick = async () => {
-        await api.cycle();
-        await refresh();
-      };
+      async function refresh() {
+        const [state, memory, goals, experiences, skills, reminders] = await Promise.all([
+          api.getState(), api.getMemory(), api.getGoals(), api.getExperiences(), api.getSkills(), api.getReminders()
+        ]);
+        setJson('state', state.data);
+        setJson('memory', memory.data);
+        setJson('goals', goals.data);
+        setJson('experiences', experiences.data);
+        setJson('skills', skills.data);
+        $('reminders').textContent = reminders.data.length
+          ? reminders.data.map((r) => `[${r.status}] ${new Date(r.dueAt).toLocaleString('pt-BR')} - ${r.text}`).join('\n')
+          : 'Nenhum lembrete.';
+      }
 
-      document.getElementById('startBtn').onclick = async () => {
-        const intervalMs = Number(document.getElementById('intervalInput').value || 10000);
-        await api.start(intervalMs);
-        await refresh();
-      };
+      async function send() {
+        const input = $('message');
+        const message = input.value.trim();
+        if (!message || $('sendBtn').disabled) return;
 
-      document.getElementById('pauseBtn').onclick = async () => {
-        await api.pause();
-        await refresh();
-      };
+        input.value = '';
+        $('sendBtn').disabled = true;
+        addMessage('user', message);
+        const pending = addMessage('assistant', '...');
 
-      const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-      ws.onmessage = (event) => {
-        const line = JSON.stringify(JSON.parse(event.data), null, 2);
-        el.logs.textContent = `${line}\n${el.logs.textContent}`.slice(0, 6000);
-      };
+        try {
+          const response = await api.chat(message);
+          pending.remove();
+          if (!response.ok) {
+            addMessage('error', `Erro: ${response.error}`);
+          } else {
+            const notes = [];
+            if (response.data.toolsUsed?.length) notes.push(`ferramentas: ${response.data.toolsUsed.join(', ')}`);
+            if (response.data.toolErrors?.length) notes.push(`falhou: ${response.data.toolErrors.map((e) => e.split(':')[0]).join(', ')}`);
+            if (response.data.usedFallback) notes.push('modo mock (Ollama indisponível)');
+            addMessage('assistant', response.data.reply || '(sem resposta)', notes.join(' | '));
+            if ($('voiceToggle').checked && response.data.reply) speak(response.data.reply);
+          }
+        } catch (error) {
+          pending.remove();
+          addMessage('error', `Erro: ${error.message}`);
+        } finally {
+          $('sendBtn').disabled = false;
+          input.focus();
+          refresh();
+        }
+      }
 
+      $('sendBtn').onclick = send;
+      $('message').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          send();
+        }
+      });
+
+      $('cycleBtn').onclick = async () => { await api.cycle(); await refresh(); };
+      $('startBtn').onclick = async () => { await api.start(Number($('intervalInput').value || 10000)); await refresh(); };
+      $('pauseBtn').onclick = async () => { await api.pause(); await refresh(); };
+
+      function connect() {
+        const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+        ws.onopen = () => { $('status').textContent = '(conectado)'; };
+        ws.onclose = () => {
+          $('status').textContent = '(desconectado, tentando de novo...)';
+          setTimeout(connect, 3000);
+        };
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.type === 'reminder') {
+            addMessage('reminder', `Lembrete: ${data.payload.text}`);
+            if ($('voiceToggle').checked) speak(`Lembrete: ${data.payload.text}`);
+            refresh();
+          }
+          $('logs').textContent = `${JSON.stringify(data, null, 2)}\n${$('logs').textContent}`.slice(0, 6000);
+        };
+      }
+
+      api.getHistory().then((history) => history.data.forEach((entry) => addMessage(entry.role, entry.content)));
+      connect();
       refresh();
       setInterval(refresh, 8000);
     </script>

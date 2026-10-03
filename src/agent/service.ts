@@ -1,30 +1,41 @@
 import { EventEmitter } from "node:events";
-import { LlmProvider } from "../llm";
-import { ExperienceRepository, GoalRepository, MemoryRepository, SkillRepository, AgentStateStore } from "../memory/repositories";
+import { config } from "../config/env";
+import { ChatMessage, LlmProvider } from "../llm";
+import { LlmClient } from "../llm/client";
+import { ConversationRepository, ReminderRepository } from "../memory/repositories";
 import { defaultPersonality, PersonalityProfile } from "../personality/profile";
 import { ReflectionService } from "../reflection/service";
 import { ToolRegistry } from "../tools/registry";
+import { clip } from "./context";
+import { AgentLoop } from "./loop";
+import { AgentStore } from "./store";
 
-interface AgentDeps {
+interface AgentDeps extends AgentStore {
   llm: LlmProvider;
-  memory: MemoryRepository;
-  goals: GoalRepository;
-  experiences: ExperienceRepository;
-  skills: SkillRepository;
-  stateStore: AgentStateStore;
   tools: ToolRegistry;
   reflection: ReflectionService;
   personality?: PersonalityProfile;
+  // Opcionais: sem `conversation` o chat não tem histórico; sem `reminders` nenhum lembrete é disparado.
+  conversation?: ConversationRepository;
+  reminders?: ReminderRepository;
+  // Corpo virtual: `describe` conta ao modelo a situação do corpo (sem isso ele não sabe que tem um);
+  // `wantsAction` diz se a mensagem do usuário pede uma ação do corpo.
+  body?: { describe(): string; wantsAction(message: string): boolean };
 }
 
 export class AgentService extends EventEmitter {
   private timer: NodeJS.Timeout | null = null;
 
+  private reminderTimer: NodeJS.Timeout | null = null;
+
   private readonly personality: PersonalityProfile;
+
+  private readonly loop: AgentLoop;
 
   constructor(private readonly deps: AgentDeps) {
     super();
     this.personality = deps.personality ?? defaultPersonality;
+    this.loop = new AgentLoop(deps, new LlmClient(deps.llm), deps.tools, deps.reflection, this.personality);
   }
 
   getState() {
@@ -43,15 +54,16 @@ export class AgentService extends EventEmitter {
 
     if (this.timer) clearInterval(this.timer);
 
-    const current = this.getState();
+    const timerMs = Math.max(this.getState().intervalMs, config.minCycleIntervalMs);
+    this.loop.resetCycleBudget();
     this.deps.stateStore.update({ mode: "automatic", running: true });
     this.timer = setInterval(() => {
       this.runCycle("automatic").catch((error) => {
         this.emitLog("Erro no ciclo automático", { error: String(error) });
       });
-    }, current.intervalMs);
+    }, timerMs);
 
-    this.emitLog("Modo automático iniciado", { intervalMs: current.intervalMs });
+    this.emitLog("Modo automático iniciado", { intervalMs: timerMs });
     return this.getState();
   }
 
@@ -66,18 +78,96 @@ export class AgentService extends EventEmitter {
     return this.getState();
   }
 
+  // Verifica periodicamente os lembretes vencidos e avisa pelo evento "reminder".
+  startReminders(intervalMs = config.reminderCheckMs) {
+    if (this.reminderTimer) clearInterval(this.reminderTimer);
+    this.reminderTimer = setInterval(() => this.fireDueReminders(), intervalMs);
+    this.reminderTimer.unref();
+  }
+
+  stopReminders() {
+    if (this.reminderTimer) clearInterval(this.reminderTimer);
+    this.reminderTimer = null;
+  }
+
+  fireDueReminders(at: Date = new Date()) {
+    const due = this.deps.reminders?.due(at) ?? [];
+    for (const reminder of due) {
+      this.deps.reminders?.markFired(reminder.id);
+      // O aviso entra na conversa para o Mordomo saber, nas próximas mensagens, que já lembrou o usuário.
+      this.deps.conversation?.add("assistant", `Lembrete: ${reminder.text}`);
+      this.emit("event", { type: "reminder", timestamp: new Date().toISOString(), payload: reminder });
+    }
+    return due;
+  }
+
   async chat(message: string) {
     const memories = this.deps.memory.recall(message, undefined, 8);
     const goals = this.deps.goals.getActive();
+    const tools = this.deps.tools.list().filter((tool) => tool.allowLlm);
 
-    const response = await this.deps.llm.generate({
-      personality: this.personality,
-      state: { ...this.getState() },
-      memories,
-      goals,
-      tools: this.deps.tools.list(),
-      userMessage: message
-    });
+    const history: ChatMessage[] = (this.deps.conversation?.recent(config.chat.historyLimit) ?? []).map((entry) => ({
+      role: entry.role,
+      content: entry.content
+    }));
+    const messages: ChatMessage[] = [...history, { role: "user", content: message }];
+    // toolsUsed: ferramentas que executaram; toolErrors: chamadas que falharam (ex.: argumentos inválidos).
+    const toolsUsed: string[] = [];
+    const toolErrors: string[] = [];
+    let toolCallCount = 0;
+
+    const ask = (withTools: boolean) =>
+      this.deps.llm.generate({
+        personality: this.personality,
+        state: { ...this.getState() },
+        memories,
+        goals,
+        tools: withTools ? tools : [],
+        userMessage: message,
+        // Lido a cada chamada: o que está na mão muda depois de uma ferramenta do corpo.
+        body: this.deps.body?.describe(),
+        messages
+      });
+
+    // O modelo pode pedir ferramentas antes de responder; cada resultado volta para ele como mensagem "tool".
+    let response = await ask(true);
+
+    // Modelos pequenos às vezes respondem "estou indo" (ou imitam uma recusa antiga do histórico) sem chamar a
+    // ferramenta: nesse caso pergunta de novo só com a mensagem atual, sem o histórico.
+    if (!response.toolCalls?.length && this.deps.body?.wantsAction(message)) {
+      messages.splice(0, messages.length - 1);
+      response = await ask(true);
+    }
+
+    while (response.toolCalls?.length) {
+      messages.push({ role: "assistant", content: response.text, toolCalls: response.toolCalls });
+
+      for (const call of response.toolCalls) {
+        let output: string;
+        if (toolCallCount >= config.chat.maxToolCalls) {
+          output = "Limite de ferramentas por mensagem atingido; responda ao usuário com o que já tem.";
+        } else if (!this.deps.tools.get(call.name)?.allowLlm) {
+          output = `Ferramenta não permitida: ${call.name}`;
+        } else {
+          toolCallCount += 1;
+          try {
+            output = JSON.stringify(await this.deps.tools.execute(call.name, call.arguments));
+            toolsUsed.push(call.name);
+          } catch (error) {
+            output = `Erro: ${error instanceof Error ? error.message : String(error)}. Corrija os argumentos e chame de novo.`;
+            toolErrors.push(`${call.name}: ${clip(output)}`);
+          }
+          this.emitLog("Ferramenta chamada no chat", { tool: call.name, arguments: call.arguments, output: clip(output) });
+        }
+        messages.push({ role: "tool", toolName: call.name, content: clip(output, 2000) });
+      }
+
+      // Atingido o limite, a próxima chamada vai sem ferramentas para forçar a resposta final.
+      response = await ask(toolCallCount < config.chat.maxToolCalls);
+    }
+
+    this.deps.conversation?.add("user", message);
+    this.deps.conversation?.add("assistant", response.text);
 
     const experience = this.deps.experiences.create({
       action: "chat",
@@ -91,83 +181,38 @@ export class AgentService extends EventEmitter {
     this.emit("event", {
       type: "chat",
       timestamp: new Date().toISOString(),
-      payload: { message, response: response.text, provider: response.provider }
+      payload: { message, response: response.text, provider: response.provider, toolsUsed, toolErrors }
     });
 
     return {
       reply: response.text,
       provider: response.provider,
       usedFallback: response.usedFallback,
+      toolsUsed,
+      toolErrors,
       experience
     };
   }
 
   async runCycle(trigger: "manual" | "automatic" = "manual") {
-    const before = this.getState();
-    this.deps.stateStore.update({ currentAction: "perceive" });
+    const result = await this.loop.runCycle();
 
-    const stateSnapshot = {
-      cycleCount: before.cycleCount,
-      trigger,
-      now: new Date().toISOString()
-    };
-
-    const goals = this.deps.goals.getActive();
-    let selectedGoal: ReturnType<GoalRepository["list"]>[number] | undefined = goals[0];
-
-    if (!selectedGoal) {
-      const createdGoal = await this.deps.tools.execute<{ title: string; description: string; priority: number; source: string }, { id: string }>(
-        "create_goal",
-        {
-          title: "Explorar estado atual com segurança",
-          description: "Coletar observações e registrar aprendizados sem ações perigosas.",
-          priority: 0.6,
-          source: "agent"
-        }
-      );
-      selectedGoal = this.deps.goals.list().find((goal) => goal.id === createdGoal.id);
+    if (result.blocked === "max_cycles_reached" && this.timer) {
+      this.pauseAutomatic();
     }
 
-    const planningNote = selectedGoal
-      ? `Focar no objetivo: ${selectedGoal.title}`
-      : "Sem objetivos definidos; manter observação segura.";
-
-    this.deps.stateStore.update({ currentAction: "execute" });
-
-    const experience = this.deps.experiences.create({
-      action: "agent_cycle",
-      goalId: selectedGoal?.id ?? null,
-      result: planningNote,
-      observation: `Estado observado: ${JSON.stringify(stateSnapshot)}`,
-      learning: "Ciclos curtos e frequentes ajudam a consolidar memória.",
-      success: true
-    });
-
-    const reflection = this.deps.reflection.reflect(experience);
-    for (const candidate of reflection.memoryCandidates) {
-      this.deps.memory.create(candidate);
-    }
-
-    for (const suggestion of reflection.goalSuggestions) {
-      this.deps.goals.create(suggestion);
-    }
-
-    const after = this.deps.stateStore.update({
-      currentAction: "idle",
-      lastCycleAt: new Date().toISOString(),
-      cycleCount: before.cycleCount + 1
-    });
-
-    const payload = {
-      trigger,
-      selectedGoal,
-      experience,
-      reflection,
-      state: after
-    };
+    const payload = { trigger, ...result, state: this.getState() };
 
     this.emit("event", { type: "cycle", timestamp: new Date().toISOString(), payload });
-    this.emitLog("Ciclo executado", { trigger, cycleCount: after.cycleCount, goalId: selectedGoal?.id });
+    this.emitLog(result.executed ? "Ciclo executado" : "Ciclo sem execução", {
+      trigger,
+      cycleCount: payload.state.cycleCount,
+      provider: result.provider,
+      tool: result.tool,
+      thought: result.decision?.thought_summary,
+      blocked: result.blocked,
+      error: result.error
+    });
 
     return payload;
   }

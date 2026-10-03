@@ -1,3 +1,4 @@
+import { AgentReflection } from "../agent/contracts";
 import { Experience, Goal, MemoryEntry } from "../memory/types";
 
 export interface ReflectionResult {
@@ -7,7 +8,12 @@ export interface ReflectionResult {
 }
 
 export class ReflectionService {
-  reflect(experience: Experience): ReflectionResult {
+  // `insight` é a reflexão opcional do LLM; sem ela valem só as regras determinísticas.
+  reflect(experience: Experience, insight: AgentReflection = {}): ReflectionResult {
+    const learning = insight.learning?.trim();
+    const memoryToCreate = insight.memory_to_create?.trim();
+    const goalToCreate = insight.goal_to_create?.trim();
+
     const memoryCandidates: ReflectionResult["memoryCandidates"] = [
       {
         type: "experience",
@@ -22,6 +28,17 @@ export class ReflectionService {
       }
     ];
 
+    if (memoryToCreate) {
+      memoryCandidates.push({
+        type: "knowledge",
+        content: memoryToCreate,
+        importance: 0.6,
+        tags: ["reflection"],
+        metadata: { experienceId: experience.id, learning: learning ?? "" },
+        source: "reflection"
+      });
+    }
+
     const goalSuggestions: ReflectionResult["goalSuggestions"] = [];
     if (!experience.success) {
       goalSuggestions.push({
@@ -32,9 +49,20 @@ export class ReflectionService {
       });
     }
 
-    const summary = experience.success
-      ? "A ação foi concluída com sucesso e gerou aprendizado útil."
-      : "A ação falhou; foi sugerido objetivo de melhoria para aumentar autonomia segura.";
+    if (goalToCreate) {
+      goalSuggestions.push({
+        title: goalToCreate,
+        description: learning ?? `Sugerido pela reflexão sobre: ${experience.action}`,
+        priority: 0.5,
+        source: "reflection"
+      });
+    }
+
+    const summary =
+      learning ??
+      (experience.success
+        ? "A ação foi concluída com sucesso e gerou aprendizado útil."
+        : "A ação falhou; foi sugerido objetivo de melhoria para aumentar autonomia segura.");
 
     return { summary, memoryCandidates, goalSuggestions };
   }

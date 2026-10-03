@@ -1,0 +1,5 @@
+# Kokoro-82M (Apache-2.0), pacote oficial: https://github.com/hexgrad/kokoro
+kokoro>=0.9.4
+soundfile
+# Sem este piso o resolvedor pode escolher um transformers antigo, que exige compilar tokenizers (Rust).
+transformers>=4.40

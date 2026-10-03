@@ -1,13 +1,37 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { AgentState, Experience, Goal, MemoryEntry, MemoryType, Skill } from "./types";
+import { AgentState, ConversationMessage, Experience, Goal, MemoryEntry, MemoryType, Reminder, Skill } from "./types";
 
 const now = () => new Date().toISOString();
 
 const parseJson = <T>(value: string): T => JSON.parse(value) as T;
 
+const normalizeText = (text: string) => text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+// Palavras sem valor de busca (já normalizadas); termos com menos de 3 letras também são ignorados.
+const STOPWORDS = new Set([
+  "que", "qual", "quais", "como", "quando", "onde", "quem", "por", "porque", "para", "pra", "com", "sem", "sobre",
+  "uma", "uns", "umas", "dos", "das", "nos", "nas", "aos", "pelo", "pela", "num", "numa", "mas", "nem", "ate",
+  "meu", "minha", "meus", "minhas", "seu", "sua", "seus", "suas", "teu", "tua", "nosso", "nossa",
+  "esse", "essa", "isso", "este", "esta", "isto", "aquele", "aquela", "aquilo", "ele", "ela", "eles", "elas",
+  "voce", "voces", "mais", "menos", "muito", "tambem", "sim", "nao", "foi", "sao", "ser", "era", "estar", "estao",
+  "tem", "ter", "tinha", "vai", "vou", "the", "and", "for", "what", "how"
+]);
+
+// Termos de busca de uma consulta em linguagem natural; sem palavras-chave, vale a frase inteira.
+function searchTerms(query?: string): string[] {
+  const phrase = normalizeText(query ?? "").trim();
+  if (!phrase) return [];
+
+  const keywords = phrase.split(/[^a-z0-9]+/).filter((word) => word.length >= 3 && !STOPWORDS.has(word));
+  return keywords.length > 0 ? [...new Set(keywords)] : [phrase];
+}
+
 export class MemoryRepository {
-  constructor(private readonly db: Database.Database) {}
+  constructor(private readonly db: Database.Database) {
+    // O LIKE do SQLite só ignora maiúsculas em ASCII; a busca compara o conteúdo sem acentos e em minúsculas.
+    db.function("normalize_text", { deterministic: true }, (value) => normalizeText(String(value ?? "")));
+  }
 
   create(input: Omit<MemoryEntry, "id" | "createdAt" | "lastUsedAt"> & { id?: string }): MemoryEntry {
     const record: MemoryEntry = {
@@ -47,18 +71,24 @@ export class MemoryRepository {
     return rows.map(this.mapRow);
   }
 
+  findByContent(content: string): MemoryEntry | null {
+    const row = this.db.prepare("SELECT * FROM memory WHERE content = ? LIMIT 1").get(content) as any;
+    return row ? this.mapRow(row) : null;
+  }
+
   recall(query?: string, tags?: string[], limit = 20): MemoryEntry[] {
+    const terms = searchTerms(query);
     let sql = `SELECT * FROM memory`;
     const params: unknown[] = [];
     const clauses: string[] = [];
 
-    if (query && query.trim().length > 0) {
-      clauses.push("content LIKE ?");
-      params.push(`%${query}%`);
+    if (terms.length > 0) {
+      clauses.push(`(${terms.map(() => "normalize_text(content) LIKE ?").join(" OR ")})`);
+      params.push(...terms.map((term) => `%${term}%`));
     }
 
     if (tags && tags.length > 0) {
-      clauses.push(tags.map(() => "tags LIKE ?").join(" OR "));
+      clauses.push(`(${tags.map(() => "tags LIKE ?").join(" OR ")})`);
       params.push(...tags.map((tag) => `%${tag}%`));
     }
 
@@ -66,10 +96,24 @@ export class MemoryRepository {
       sql += ` WHERE ${clauses.join(" AND ")}`;
     }
 
-    sql += " ORDER BY importance DESC, last_used_at DESC LIMIT ?";
-    params.push(limit);
+    sql += " ORDER BY importance DESC, last_used_at DESC";
 
-    const rows = this.db.prepare(sql).all(...params) as any[];
+    let rows: any[];
+    if (terms.length > 1) {
+      // Basta uma palavra-chave para entrar; quem casa mais palavras vem primeiro (empate: ordem do SQL).
+      const hits = (row: any) => {
+        const content = normalizeText(row.content);
+        return terms.filter((term) => content.includes(term)).length;
+      };
+      rows = (this.db.prepare(sql).all(...params) as any[])
+        .map((row) => ({ row, hits: hits(row) }))
+        .sort((a, b) => b.hits - a.hits)
+        .slice(0, limit)
+        .map((entry) => entry.row);
+    } else {
+      rows = this.db.prepare(`${sql} LIMIT ?`).all(...params, limit) as any[];
+    }
+
     const timestamp = now();
     for (const row of rows) {
       this.db.prepare("UPDATE memory SET last_used_at = ? WHERE id = ?").run(timestamp, row.id);
@@ -319,10 +363,81 @@ export class SkillRepository {
   }
 }
 
+export class ConversationRepository {
+  constructor(private readonly db: Database.Database) {}
+
+  add(role: ConversationMessage["role"], content: string): ConversationMessage {
+    const record: ConversationMessage = { id: randomUUID(), role, content, createdAt: now() };
+    this.db
+      .prepare("INSERT INTO conversation (id, role, content, created_at) VALUES (?, ?, ?, ?)")
+      .run(record.id, record.role, record.content, record.createdAt);
+    return record;
+  }
+
+  // As últimas `limit` mensagens, da mais antiga para a mais nova.
+  recent(limit = 20): ConversationMessage[] {
+    const rows = this.db
+      .prepare("SELECT * FROM conversation ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(limit) as any[];
+    return rows
+      .reverse()
+      .map((row) => ({ id: row.id, role: row.role, content: row.content, createdAt: row.created_at }));
+  }
+}
+
+export class ReminderRepository {
+  constructor(private readonly db: Database.Database) {}
+
+  create(input: Pick<Reminder, "text" | "dueAt">): Reminder {
+    const record: Reminder = { id: randomUUID(), ...input, status: "pending", createdAt: now(), firedAt: null };
+    this.db
+      .prepare("INSERT INTO reminders (id, text, due_at, status, created_at, fired_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(record.id, record.text, record.dueAt, record.status, record.createdAt, record.firedAt);
+    return record;
+  }
+
+  list(status?: Reminder["status"]): Reminder[] {
+    const rows = (
+      status
+        ? this.db.prepare("SELECT * FROM reminders WHERE status = ? ORDER BY due_at ASC").all(status)
+        : this.db.prepare("SELECT * FROM reminders ORDER BY due_at ASC").all()
+    ) as any[];
+    return rows.map(this.mapRow);
+  }
+
+  // Lembretes pendentes cujo horário já chegou.
+  due(at: Date = new Date()): Reminder[] {
+    const rows = this.db
+      .prepare("SELECT * FROM reminders WHERE status = 'pending' AND due_at <= ? ORDER BY due_at ASC")
+      .all(at.toISOString()) as any[];
+    return rows.map(this.mapRow);
+  }
+
+  markFired(id: string): void {
+    this.db.prepare("UPDATE reminders SET status = 'fired', fired_at = ? WHERE id = ?").run(now(), id);
+  }
+
+  cancel(id: string): boolean {
+    return this.db.prepare("UPDATE reminders SET status = 'cancelled' WHERE id = ? AND status = 'pending'").run(id).changes > 0;
+  }
+
+  private mapRow(row: any): Reminder {
+    return {
+      id: row.id,
+      text: row.text,
+      dueAt: row.due_at,
+      status: row.status,
+      createdAt: row.created_at,
+      firedAt: row.fired_at
+    };
+  }
+}
+
 export class AgentStateStore {
   private state: AgentState;
 
-  constructor(initialIntervalMs: number) {
+  // Com `db`, a contagem de ciclos, o último ciclo e o intervalo sobrevivem a reinícios; o modo sempre volta a manual.
+  constructor(initialIntervalMs: number, private readonly db?: Database.Database) {
     this.state = {
       mode: "manual",
       running: false,
@@ -331,6 +446,17 @@ export class AgentStateStore {
       lastCycleAt: null,
       cycleCount: 0
     };
+
+    const saved = db?.prepare("SELECT value FROM agent_state WHERE key = 'state'").get() as { value: string } | undefined;
+    if (saved) {
+      const { cycleCount, lastCycleAt, intervalMs } = parseJson<Partial<AgentState>>(saved.value);
+      this.state = {
+        ...this.state,
+        cycleCount: cycleCount ?? 0,
+        lastCycleAt: lastCycleAt ?? null,
+        intervalMs: intervalMs ?? initialIntervalMs
+      };
+    }
   }
 
   get(): AgentState {
@@ -339,6 +465,10 @@ export class AgentStateStore {
 
   update(patch: Partial<AgentState>): AgentState {
     this.state = { ...this.state, ...patch };
+    const { cycleCount, lastCycleAt, intervalMs } = this.state;
+    this.db
+      ?.prepare("INSERT INTO agent_state (key, value) VALUES ('state', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify({ cycleCount, lastCycleAt, intervalMs }));
     return this.get();
   }
 }

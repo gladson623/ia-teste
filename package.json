@@ -7,7 +7,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test tests/**/*.test.ts"
+    "tts": "tts\\.venv\\Scripts\\python.exe tts/server.py",
+    "test": "node --import tsx --test tests/**/*.test.ts test/**/*.test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
@@ -23,5 +24,8 @@
     "@types/ws": "^8.5.12",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3"
+  },
+  "volta": {
+    "node": "22.23.3"
   }
 }
